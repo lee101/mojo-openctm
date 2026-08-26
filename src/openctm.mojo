@@ -4,7 +4,6 @@ This is an altered, structure-of-arrays-free port of OpenCTM's C kernels.
 Callers own every buffer; the C ABI passes them as integer addresses.
 """
 
-from std.algorithm import parallelize
 from std.math import acos, atan2, ceil, cos, floor, pow, sin, sqrt
 from std.sys.info import simd_width_of as simdwidthof
 
@@ -12,7 +11,6 @@ comptime F32Ptr = UnsafePointer[Float32, AnyOrigin[mut=True]]
 comptime I32Ptr = UnsafePointer[Int32, AnyOrigin[mut=True]]
 comptime U32Ptr = UnsafePointer[UInt32, AnyOrigin[mut=True]]
 comptime U8Ptr = UnsafePointer[UInt8, AnyOrigin[mut=True]]
-comptime INTERLEAVE_PARALLEL_THRESHOLD = 131_072
 
 
 def fp(address: Int) -> F32Ptr:
@@ -187,22 +185,8 @@ def interleave_ints(
     var data = ip(data_address)
     var bytes = bp(bytes_address)
 
-    @parameter
-    def work(k: Int):
-        interleave_int_component(
-            ip(data_address),
-            bp(bytes_address),
-            count,
-            size,
-            signed_ints,
-            k,
-        )
-
-    if count >= INTERLEAVE_PARALLEL_THRESHOLD and size > 1:
-        parallelize[work](size, size)
-    else:
-        for k in range(size):
-            interleave_int_component(data, bytes, count, size, signed_ints, k)
+    for k in range(size):
+        interleave_int_component(data, bytes, count, size, signed_ints, k)
 
 
 # OpenCTM: lib/stream.c _ctmStreamReadPackedInts
