@@ -266,8 +266,8 @@ def _sorted_triangles(triangles: U32) -> U32:
 
 
 def _index_deltas(triangles: U32) -> I32:
-    result = triangles.copy()
-    lib().ctm_make_index_deltas(addr(result), len(result))
+    result = np.empty_like(triangles)
+    lib().ctm_make_index_deltas_to(addr(triangles), addr(result), len(result))
     return result.view(np.int32)
 
 

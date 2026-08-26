@@ -131,16 +131,17 @@ def test_index_prediction_matches_direct_upstream_port_and_inverts():
     assert np.array_equal(restored, expected)
 
 
-@pytest.mark.parametrize("triangle_count", [1, 2, 4, 5, 8, 9])
+@pytest.mark.parametrize("triangle_count", [1, 2, 4, 5, 8, 9, 131_072, 131_073])
 def test_index_prediction_simd_tail_sizes(triangle_count):
     rng = np.random.default_rng(triangle_count)
     indices = rng.integers(0, 100, size=(triangle_count, 3), dtype=np.uint32)
     expected, expected_delta = numpy_rearrange_and_deltas(indices)
     arranged = _sorted_triangles(indices)
-    lib().ctm_make_index_deltas(addr(arranged), len(arranged))
-    assert np.array_equal(arranged.view(np.uint32), expected_delta)
-    lib().ctm_restore_indices(addr(arranged), len(arranged))
-    assert np.array_equal(arranged, expected)
+    deltas = np.empty_like(arranged)
+    lib().ctm_make_index_deltas_to(addr(arranged), addr(deltas), len(arranged))
+    assert np.array_equal(deltas.view(np.uint32), expected_delta)
+    lib().ctm_restore_indices(addr(deltas), len(deltas))
+    assert np.array_equal(deltas, expected)
 
 
 @pytest.mark.parametrize("signed", [False, True])
@@ -171,7 +172,7 @@ def test_integer_byte_interleaving_matches_stream_c(signed):
     "count,signed",
     [(7, False), (131_071, False), (131_072, True)],
 )
-def test_integer_interleave_simd_tail_and_parallel_threshold(count, signed):
+def test_integer_interleave_simd_tail_and_large_count(count, signed):
     rng = np.random.default_rng(count)
     values = rng.integers(-(2**30), 2**30, size=(count, 3), dtype=np.int32)
     transformed = values.copy()

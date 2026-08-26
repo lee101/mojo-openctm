@@ -123,6 +123,98 @@ def make_index_deltas(indices_address: Int, triangle_count: Int) abi("C"):
         make_index_delta_range(up(indices_address), triangle_count)
 
 
+@always_inline
+def make_index_delta_to_range(
+    source: U32Ptr, destination: U32Ptr, start: Int, end: Int
+):
+    comptime W = simdwidthof[DType.float64]()
+    var i = start
+    while i + W <= end:
+        comptime
+        if W == 4:
+            var packed0 = source.load[width=W](i * 3)
+            var packed1 = source.load[width=W](i * 3 + W)
+            var packed2 = source.load[width=W](i * 3 + 2 * W)
+            var a01 = packed0.shuffle[0, 3, 0, 0]()
+            var a23 = packed1.shuffle[2, 5, 0, 0](packed2)
+            var a = a01.shuffle[0, 1, 4, 5](a23)
+            var b01 = packed0.shuffle[1, 4, 0, 0](packed1)
+            var b23 = packed1.shuffle[3, 6, 0, 0](packed2)
+            var b = b01.shuffle[0, 1, 4, 5](b23)
+            var c01 = packed0.shuffle[2, 5, 0, 0](packed1)
+            var c23 = packed2.shuffle[0, 3, 0, 0]()
+            var c = c01.shuffle[0, 1, 4, 5](c23)
+            var previous_a = SIMD[DType.uint32, W](
+                source[i * 3 - 3], a[0], a[1], a[2]
+            )
+            var previous_b = SIMD[DType.uint32, W](
+                source[i * 3 - 2], b[0], b[1], b[2]
+            )
+            var delta_a = a - previous_a
+            var delta_b = b - a.eq(previous_a).select(previous_b, a)
+            var delta_c = c - a
+            destination.store(
+                i * 3,
+                SIMD[DType.uint32, W](
+                    delta_a[0], delta_b[0], delta_c[0], delta_a[1]
+                ),
+            )
+            destination.store(
+                i * 3 + W,
+                SIMD[DType.uint32, W](
+                    delta_b[1], delta_c[1], delta_a[2], delta_b[2]
+                ),
+            )
+            destination.store(
+                i * 3 + 2 * W,
+                SIMD[DType.uint32, W](
+                    delta_c[2], delta_a[3], delta_b[3], delta_c[3]
+                ),
+            )
+        else:
+            var a = (source + i * 3).strided_load[width=W](3)
+            var b = (source + i * 3 + 1).strided_load[width=W](3)
+            var c = (source + i * 3 + 2).strided_load[width=W](3)
+            var previous_a = (source + (i - 1) * 3).strided_load[width=W](3)
+            var previous_b = (
+                source + (i - 1) * 3 + 1
+            ).strided_load[width=W](3)
+            (destination + i * 3).strided_store[width=W](a - previous_a, 3)
+            (destination + i * 3 + 1).strided_store[width=W](
+                b - a.eq(previous_a).select(previous_b, a), 3
+            )
+            (destination + i * 3 + 2).strided_store[width=W](c - a, 3)
+        i += W
+    while i < end:
+        var base = i * 3
+        destination[base] = source[base] - source[base - 3]
+        destination[base + 1] = source[base + 1] - (
+            source[base - 2] if source[base] == source[base - 3] else source[base]
+        )
+        destination[base + 2] = source[base + 2] - source[base]
+        i += 1
+
+
+# Fused copy and index prediction for callers that own a separate output buffer.
+@export("ctm_make_index_deltas_to")
+def make_index_deltas_to(
+    source_address: Int,
+    destination_address: Int,
+    triangle_count: Int,
+) abi("C"):
+    if triangle_count <= 0:
+        return
+    var source = up(source_address)
+    var destination = up(destination_address)
+    destination[0] = source[0]
+    destination[1] = source[1] - source[0]
+    destination[2] = source[2] - source[0]
+    if triangle_count == 1:
+        return
+
+    make_index_delta_to_range(source, destination, 1, triangle_count)
+
+
 def interleave_int_component(
     data: I32Ptr,
     bytes: U8Ptr,
@@ -130,11 +222,13 @@ def interleave_int_component(
     size: Int,
     signed_ints: Int,
     k: Int,
+    start: Int,
+    end: Int,
 ):
     comptime W = simdwidthof[DType.float64]()
     var plane = count * size
-    var i = 0
-    while i + W <= count:
+    var i = start
+    while i + W <= end:
         var value = (data + i * size + k).strided_load[width=W](size)
         if signed_ints != 0:
             value = value.lt(0).select(-1 - (value << 1), value << 1)
@@ -145,7 +239,7 @@ def interleave_int_component(
         bytes.store(offset + plane, ((x >> 16) & 0xff).cast[DType.uint8]())
         bytes.store(offset, (x >> 24).cast[DType.uint8]())
         i += W
-    while i < count:
+    while i < end:
         var value = data[i * size + k]
         if signed_ints != 0:
             value = -1 - (value << 1) if value < 0 else value << 1
@@ -156,6 +250,56 @@ def interleave_int_component(
         bytes[offset + plane] = UInt8((x >> 16) & 0xff)
         bytes[offset] = UInt8((x >> 24) & 0xff)
         i += 1
+
+
+def interleave_int3(
+    data: I32Ptr,
+    bytes: U8Ptr,
+    count: Int,
+    signed_ints: Int,
+):
+    comptime W = simdwidthof[DType.float64]()
+    var plane = count * 3
+    var i = 0
+    comptime
+    if W == 4:
+        while i + W <= count:
+            var packed0 = data.load[width=W](i * 3)
+            var packed1 = data.load[width=W](i * 3 + W)
+            var packed2 = data.load[width=W](i * 3 + 2 * W)
+            var a01 = packed0.shuffle[0, 3, 0, 0]()
+            var a23 = packed1.shuffle[2, 5, 0, 0](packed2)
+            var a = a01.shuffle[0, 1, 4, 5](a23)
+            var b01 = packed0.shuffle[1, 4, 0, 0](packed1)
+            var b23 = packed1.shuffle[3, 6, 0, 0](packed2)
+            var b = b01.shuffle[0, 1, 4, 5](b23)
+            var c01 = packed0.shuffle[2, 5, 0, 0](packed1)
+            var c23 = packed2.shuffle[0, 3, 0, 0]()
+            var c = c01.shuffle[0, 1, 4, 5](c23)
+            if signed_ints != 0:
+                a = a.lt(0).select(-1 - (a << 1), a << 1)
+                b = b.lt(0).select(-1 - (b << 1), b << 1)
+                c = c.lt(0).select(-1 - (c << 1), c << 1)
+            var x0 = a.cast[DType.uint32]()
+            var x1 = b.cast[DType.uint32]()
+            var x2 = c.cast[DType.uint32]()
+            bytes.store(i + 3 * plane, (x0 & 0xff).cast[DType.uint8]())
+            bytes.store(i + 2 * plane, ((x0 >> 8) & 0xff).cast[DType.uint8]())
+            bytes.store(i + plane, ((x0 >> 16) & 0xff).cast[DType.uint8]())
+            bytes.store(i, (x0 >> 24).cast[DType.uint8]())
+            var offset1 = i + count
+            bytes.store(offset1 + 3 * plane, (x1 & 0xff).cast[DType.uint8]())
+            bytes.store(offset1 + 2 * plane, ((x1 >> 8) & 0xff).cast[DType.uint8]())
+            bytes.store(offset1 + plane, ((x1 >> 16) & 0xff).cast[DType.uint8]())
+            bytes.store(offset1, (x1 >> 24).cast[DType.uint8]())
+            var offset2 = i + 2 * count
+            bytes.store(offset2 + 3 * plane, (x2 & 0xff).cast[DType.uint8]())
+            bytes.store(offset2 + 2 * plane, ((x2 >> 8) & 0xff).cast[DType.uint8]())
+            bytes.store(offset2 + plane, ((x2 >> 16) & 0xff).cast[DType.uint8]())
+            bytes.store(offset2, (x2 >> 24).cast[DType.uint8]())
+            i += W
+    for k in range(3):
+        interleave_int_component(data, bytes, count, 3, signed_ints, k, i, count)
 
 
 # OpenCTM: lib/compressMG1.c _ctmRestoreIndices
@@ -182,11 +326,13 @@ def interleave_ints(
     size: Int,
     signed_ints: Int,
 ) abi("C"):
-    var data = ip(data_address)
-    var bytes = bp(bytes_address)
-
-    for k in range(size):
-        interleave_int_component(data, bytes, count, size, signed_ints, k)
+    if size == 3:
+        interleave_int3(ip(data_address), bp(bytes_address), count, signed_ints)
+    else:
+        for k in range(size):
+            interleave_int_component(
+                ip(data_address), bp(bytes_address), count, size, signed_ints, k, 0, count
+            )
 
 
 # OpenCTM: lib/stream.c _ctmStreamReadPackedInts

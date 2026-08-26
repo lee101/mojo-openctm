@@ -107,12 +107,17 @@ E5-2697 v4 @ 2.30GHz; Linux x86_64`):
 
 | Kernel | Mojo | NumPy reference | Speedup |
 |---|---:|---:|---:|
-| MG1/MG2 index prediction, 1M tris | 3.76 ms | 13.10 ms | 3.49x |
-| LZMA integer interleave, 6M ints | 10.51 ms | 41.43 ms | 3.94x |
-| MG2 smooth-normal prediction, 798K tris | 13.76 ms | 412.85 ms | 30.01x |
+| MG1/MG2 index prediction, 1M tris | 2.10 ms | 10.75 ms | 5.12x |
+| LZMA integer interleave, 6M ints | 6.17 ms | 28.92 ms | 4.69x |
+| MG2 smooth-normal prediction, 798K tris | 13.05 ms | 979.81 ms | 75.08x |
 
 The NumPy columns run source-equivalent reference algorithms on the same input.
 The benchmark checks output parity before printing results.
+
+Thresholded CPU parallelism was tested for the two streaming transforms but
+regressed their locked benchmark times, so the optimized kernels remain serial.
+Their contiguous SIMD loads already approach the memory-bandwidth limit without
+thread-launch overhead.
 
 GPU acceleration is intentionally omitted. The profiled optimization targets
 are streaming transforms with fewer than two arithmetic operations per byte

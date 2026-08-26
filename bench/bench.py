@@ -83,8 +83,7 @@ def main():
     numpy_indices = np.empty_like(base)
 
     def mojo_delta():
-        mojo_indices[:] = base
-        lib().ctm_make_index_deltas(addr(mojo_indices), triangle_count)
+        lib().ctm_make_index_deltas_to(addr(base), addr(mojo_indices), triangle_count)
 
     mojo_time = timed(mojo_delta)
     numpy_time = timed(lambda: numpy_index_deltas(base, numpy_indices))

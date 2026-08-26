@@ -16,6 +16,7 @@ F = ctypes.c_float
 _SIGNATURES = {
     "ctm_rearrange_triangles": ([I, I], None),
     "ctm_make_index_deltas": ([I, I], None),
+    "ctm_make_index_deltas_to": ([I, I, I], None),
     "ctm_restore_indices": ([I, I], None),
     "ctm_interleave_ints": ([I, I, I, I, I], None),
     "ctm_deinterleave_ints": ([I, I, I, I, I], None),
